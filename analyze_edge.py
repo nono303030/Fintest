@@ -6,17 +6,44 @@ def load_data(filepath):
     # Load the CSV file
     df = pd.read_csv(filepath)
 
-    # Filter for NQH5
-    df = df[df['symbol'] == 'NQH5'].copy()
-
     # Convert ts_event to datetime
     df['ts_event'] = pd.to_datetime(df['ts_event'])
+
+    # Identify relevant symbols (Exclude spreads)
+    # We want front-month contracts: NQH5, NQM5, NQU5, NQZ5, NQH6
+    # Simple rule: For each day, use the symbol with the highest volume.
+
+    # Filter out spreads first
+    df = df[~df['symbol'].str.contains('-')].copy()
+
+    # Convert timestamp to date for grouping
+    df['date'] = df['ts_event'].dt.date
+
+    # Calculate daily volume per symbol
+    daily_vol = df.groupby(['date', 'symbol'])['volume'].sum().reset_index()
+
+    # Find the symbol with max volume for each day
+    # Sort by date and volume descending, then take first per date
+    daily_vol_sorted = daily_vol.sort_values(['date', 'volume'], ascending=[True, False])
+    best_symbols = daily_vol_sorted.groupby('date').first().reset_index()[['date', 'symbol']]
+
+    # Rename column for merge
+    best_symbols.rename(columns={'symbol': 'active_symbol'}, inplace=True)
+
+    # Merge back to filter original df
+    df = df.merge(best_symbols, on='date', how='left')
+
+    # Keep only rows where symbol matches the active symbol for that day
+    df = df[df['symbol'] == df['active_symbol']].copy()
 
     # Set index
     df.set_index('ts_event', inplace=True)
 
     # Sort just in case
     df.sort_index(inplace=True)
+
+    # Clean up
+    df.drop(columns=['date', 'active_symbol'], inplace=True)
 
     return df
 
@@ -131,11 +158,10 @@ class BacktestEngine:
         self.take_profit = tp
 
 def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, max_dd=2500):
-    # Use 2 Micro contracts (0.2) or 5 Micros (0.5) or 1 Micro (0.1)?
-    # Let's try 2 Micros (0.2 lots of NQ) to have meaningful PnL but safe risk.
-    # Risk management: 50 pt stop on 2 micros = 50 * 20 * 0.2 = $200 risk per trade.
-    # Daily loss $1000 = 5 trades allowed. Good.
-    engine = BacktestEngine(max_daily_loss=max_daily_loss, max_trailing_drawdown=max_dd, contract_multiplier=0.2)
+    # Use 1 Micro contract (0.1) to manage drawdown over the full year.
+    # 2 Micros (0.2) hit the $2500 drawdown limit in the full year backtest.
+    # Risk management: 100 pt stop on 1 micro = 100 * 20 * 0.1 = $200 risk per trade.
+    engine = BacktestEngine(max_daily_loss=max_daily_loss, max_trailing_drawdown=max_dd, contract_multiplier=0.1)
 
     current_date = None
     session_start_et = None
@@ -239,9 +265,10 @@ def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, 
     return engine
 
 def optimize(df):
-    orb_minutes_options = [5, 15, 30]
-    sl_pts_options = [30, 50, 70, 100]
-    tp_pts_options = [50, 100, 150, 200]
+    # Reduced search space based on previous findings (15m ORB, 100 SL/TP was best)
+    orb_minutes_options = [15]
+    sl_pts_options = [80, 100, 120]
+    tp_pts_options = [80, 100, 120]
 
     best_score = -float('inf')
     best_params = {}
@@ -250,7 +277,10 @@ def optimize(df):
     combinations = list(itertools.product(orb_minutes_options, sl_pts_options, tp_pts_options))
     print(f"Testing {len(combinations)} combinations...")
 
+    count = 0
+    total = len(combinations)
     for orb, sl, tp in combinations:
+        count += 1
         if tp < sl: # Skip low RR
             continue
 
@@ -284,7 +314,7 @@ def optimize(df):
                 'failed': engine.failed
             }
 
-        # print(f"ORB={orb}, SL={sl}, TP={tp} -> PnL: {total_pnl:.2f}, Failed: {engine.failed}")
+        print(f"[{count}/{total}] ORB={orb}, SL={sl}, TP={tp} -> PnL: {total_pnl:.2f}, Failed: {engine.failed}")
 
     return best_params, best_result
 

@@ -15,9 +15,9 @@ def detailed_report():
     orb = 15
     sl = 100
     tp = 100
-    contract_size = 0.2 # 2 Micros
+    # Note: run_backtest in analyze_edge.py now defaults to 0.1 multiplier.
 
-    print(f"Running Detailed Backtest with: ORB={orb}m, SL={sl}, TP={tp}, Size={contract_size}")
+    print(f"Running Detailed Backtest with: ORB={orb}m, SL={sl}, TP={tp}, Size=0.1 (1 Micro)")
 
     # Re-run backtest to get trade details
     engine = run_backtest(df, orb_minutes=orb, sl_pts=sl, tp_pts=tp, max_daily_loss=1000, max_dd=2500)
@@ -57,7 +57,7 @@ def detailed_report():
             current_win_streak = 0
             max_consecutive_losses = max(max_consecutive_losses, current_loss_streak)
 
-    print("\n=== DETAILED STRATEGY REPORT ===")
+    print("\n=== DETAILED STRATEGY REPORT (Full Year) ===")
     print(f"Net Profit:       ${net_profit:,.2f}")
     print(f"Total Trades:     {total_trades}")
     print(f"Win Rate:         {win_rate:.2%}")
@@ -70,9 +70,9 @@ def detailed_report():
     print(f"Account Failed:   {engine.failed}")
 
     print("\n--- Trade History (Last 5) ---")
-    # Convert timestamps for better readability
-    trades_df['exit_time'] = pd.to_datetime(trades_df['exit_time'])
-    print(trades_df[['exit_time', 'exit_price', 'pnl', 'reason']].tail())
+    if 'exit_time' in trades_df.columns:
+        trades_df['exit_time'] = pd.to_datetime(trades_df['exit_time'])
+        print(trades_df[['exit_time', 'exit_price', 'pnl', 'reason']].tail())
 
 if __name__ == "__main__":
     detailed_report()
