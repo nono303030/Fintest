@@ -33,6 +33,7 @@ class BacktestEngine:
 
         self.position = 0  # 0: Flat, 1: Long, -1: Short
         self.entry_price = 0
+        self.entry_time = None
         self.stop_loss = 0
         self.take_profit = 0
 
@@ -107,6 +108,7 @@ class BacktestEngine:
         self.balance += pnl
 
         self.trades.append({
+            'entry_time': self.entry_time,
             'exit_time': timestamp,
             'exit_price': price,
             'pnl': pnl,
@@ -116,6 +118,7 @@ class BacktestEngine:
         })
 
         self.position = 0
+        self.entry_time = None
 
     def enter_position(self, timestamp, side, price, sl, tp):
         if self.failed or self.daily_loss_hit or self.position != 0:
@@ -123,6 +126,7 @@ class BacktestEngine:
 
         self.position = 1 if side == 'long' else -1
         self.entry_price = price
+        self.entry_time = timestamp
         self.stop_loss = sl
         self.take_profit = tp
 
