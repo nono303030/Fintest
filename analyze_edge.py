@@ -134,22 +134,25 @@ def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, 
     engine = BacktestEngine(max_daily_loss=max_daily_loss, max_trailing_drawdown=max_dd, contract_multiplier=0.2)
 
     current_date = None
-    session_start_time = None
-    session_end_time = None
+    session_start_et = None
+    session_end_et = None
+    orb_end_et = None
+
     orb_high = -1
     orb_low = 999999
     orb_complete = False
     entry_taken = False
 
-    # Pre-calculate UTC times for 09:30 ET and 16:00 ET (Assuming Standard Time for Jan: UTC-5)
-    open_hour = 14
-    open_minute = 30
-    close_hour = 20
-    close_minute = 55
-
     for timestamp, row in df.iterrows():
-        # Check for new day
-        day = timestamp.date()
+        # Convert timestamp to US/Eastern for correct session handling (DST aware)
+        try:
+            ts_et = timestamp.tz_convert('US/Eastern')
+        except TypeError:
+            # If timestamp is naive (shouldn't be), localize to UTC first then convert
+            ts_et = timestamp.tz_localize('UTC').tz_convert('US/Eastern')
+
+        # Check for new day based on ET date
+        day = ts_et.date()
         if day != current_date:
             current_date = day
             engine.new_day(timestamp)
@@ -158,14 +161,19 @@ def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, 
             orb_complete = False
             entry_taken = False
 
-            session_start_time = timestamp.replace(hour=open_hour, minute=open_minute, second=0)
-            session_end_time = timestamp.replace(hour=close_hour, minute=close_minute, second=0)
+            # Define session boundaries in ET
+            # 09:30 ET Start
+            session_start_et = pd.Timestamp(day).tz_localize('US/Eastern') + pd.Timedelta(hours=9, minutes=30)
+            # 15:55 ET End (Close 5 mins before 16:00 ET to meet prop firm rules)
+            session_end_et = pd.Timestamp(day).tz_localize('US/Eastern') + pd.Timedelta(hours=15, minutes=55)
+
+            orb_end_et = session_start_et + pd.Timedelta(minutes=orb_minutes)
 
         # Check if we are in session
-        if timestamp < session_start_time:
+        if ts_et < session_start_et:
             continue
 
-        if timestamp > session_end_time:
+        if ts_et >= session_end_et:
             if engine.position != 0:
                 engine.close_position(timestamp, row['close'], "EOD")
             continue
@@ -185,12 +193,10 @@ def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, 
             engine.check_sl_tp(timestamp, row['high'], row['low'])
 
         # ORB Logic
-        orb_end_time = session_start_time + pd.Timedelta(minutes=orb_minutes)
-
-        if timestamp <= orb_end_time:
+        if ts_et <= orb_end_et:
             orb_high = max(orb_high, row['high'])
             orb_low = min(orb_low, row['low'])
-            if timestamp == orb_end_time:
+            if ts_et == orb_end_et:
                 orb_complete = True
 
         # Check for Entry
