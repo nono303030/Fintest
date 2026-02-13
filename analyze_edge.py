@@ -60,8 +60,10 @@ class BacktestEngine:
 
         self.payout_target = payout_target
         self.payouts_count = 0
+        self.burns_count = 0
         self.total_payout_amount = 0
         self.payout_history = []
+        self.burn_history = []
 
         self.position = 0  # 0: Flat, 1: Long, -1: Short
         self.entry_price = 0
@@ -122,8 +124,19 @@ class BacktestEngine:
         self.max_dd_reached = max(self.max_dd_reached, drawdown)
 
         if drawdown >= self.max_trailing_drawdown:
-            self.failed = True
-            self.close_position(timestamp, current_price, "Max Drawdown Hit")
+            self.failed = True # Mark as failed for current cycle
+            self.burns_count += 1
+            self.burn_history.append(timestamp)
+
+            self.close_position(timestamp, current_price, "Max Drawdown Hit (Burn)")
+
+            # Reset Account for Next Cycle (Simulate Buying New Eval)
+            self.balance = self.initial_balance
+            self.equity = self.initial_balance
+            self.high_water_mark = self.initial_balance
+            self.start_of_day_equity = self.initial_balance
+            self.max_dd_reached = 0
+            self.failed = False # Reset failed flag for new cycle
 
         # Check Daily Loss
         daily_pnl = self.equity - self.start_of_day_equity
@@ -230,8 +243,7 @@ def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, 
 
         # Update Engine
         engine.update(timestamp, row['close'])
-        if engine.failed:
-            break
+        # if engine.failed: break # Don't break on burn anymore, we reset and continue!
 
         if engine.daily_loss_hit:
             if engine.position != 0:
