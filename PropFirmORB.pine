@@ -1,0 +1,101 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © JulesPropFirm
+
+//@version=5
+strategy("Prop Firm Payout Hunter - 15m ORB", overlay=true, initial_capital=50000, default_qty_type=strategy.fixed, default_qty_value=4, currency=currency.USD, commission_type=strategy.commission.cash_per_contract, commission_value=0.5)
+
+// --- Inputs ---
+orbDuration = input.int(15, "ORB Duration (Minutes)", minval=5, maxval=60)
+stopLossPts = input.int(100, "Stop Loss (Points)", minval=10)
+takeProfitPts = input.int(100, "Take Profit (Points)", minval=10)
+sessStart = input.session("0930-1555", "Trading Session (New York Time)")
+payoutTarget = input.float(3000, "Payout Target ($)", minval=100)
+burnLimit = input.float(2500, "Max Drawdown Limit ($)", minval=100)
+
+// --- Time Handling (NY Time) ---
+// Strategy runs on exchange time, assuming standard CME data (usually CT or ET).
+// TradingView handles sessions based on the chart settings. Ensure chart is set to "Exchange" or "New York".
+inSession = time(timeframe.period, sessStart)
+isNewSession = not inSession[1] and inSession
+
+// --- ORB Logic ---
+var float orbHigh = na
+var float orbLow = na
+var bool orbComplete = false
+var int entryBarIndex = na
+
+// Reset daily variables at start of session
+if isNewSession
+    orbHigh := high
+    orbLow := low
+    orbComplete := false
+    entryBarIndex := na
+
+// Update High/Low during the first X minutes
+// Check if we are within the ORB window
+// We can use time difference from session start
+// Or just count bars if timeframe is fixed. Let's use time check.
+startTime = time("1", sessStart) // Get start time of session for current day
+timeFromStart = (time - startTime) / 60000 // Minutes since open
+
+if inSession and timeFromStart < orbDuration
+    orbHigh := math.max(orbHigh, high)
+    orbLow := math.min(orbLow, low)
+else if inSession and timeFromStart >= orbDuration and not orbComplete
+    orbComplete := true
+
+// --- Entry Logic ---
+// Only take 1 trade per day
+var bool tradeTakenToday = false
+if isNewSession
+    tradeTakenToday := false
+
+// Entry Conditions
+longCond = orbComplete and not tradeTakenToday and close > orbHigh and strategy.position_size == 0
+shortCond = orbComplete and not tradeTakenToday and close < orbLow and strategy.position_size == 0
+
+if longCond
+    strategy.entry("Long", strategy.long, stop=orbHigh + 0.25)
+    tradeTakenToday := true
+
+if shortCond
+    strategy.entry("Short", strategy.short, stop=orbLow - 0.25)
+    tradeTakenToday := true
+
+// --- Exit Logic ---
+// SL/TP
+// strategy.exit uses 'loss' and 'profit' in ticks if not specified otherwise, or currency if configured.
+// But standard usage 'loss' is in ticks relative to entry price.
+// 1 Point = 4 Ticks on NQ.
+// So 100 points = 400 ticks.
+strategy.exit("Bracket", loss=stopLossPts * 4, profit=takeProfitPts * 4)
+
+// EOD Exit (Hard Close at 15:55)
+// Check if session is ending
+if not inSession and strategy.position_size != 0
+    strategy.close_all(comment="EOD Close")
+
+// --- Plotting ---
+plot(inSession ? orbHigh : na, "ORB High", color=color.green, style=plot.style_linebr)
+plot(inSession ? orbLow : na, "ORB Low", color=color.red, style=plot.style_linebr)
+
+// --- Simulation of Payouts (Visual Only) ---
+// TradingView Strategy Tester handles equity continuously. It won't "reset" the equity curve.
+// But we can visualize the drawdown limit.
+
+var float highWaterMark = 50000
+var float currentEquity = 50000
+
+currentEquity := strategy.equity
+
+if currentEquity > highWaterMark
+    highWaterMark := currentEquity
+
+drawdown = highWaterMark - currentEquity
+plot(drawdown, "Trailing Drawdown", color=color.orange, force_overlay=false)
+hline(burnLimit, "Max Burn Limit", color=color.red)
+
+// Payout Markers
+if currentEquity >= 50000 + payoutTarget
+    // This is just visual, TV won't actually withdraw.
+    label.new(bar_index, high, text="PAYOUT TARGET HIT!\n(Reset in Real Life)", color=color.gold, style=label.style_label_down)
