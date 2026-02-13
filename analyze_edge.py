@@ -48,7 +48,7 @@ def load_data(filepath):
     return df
 
 class BacktestEngine:
-    def __init__(self, initial_balance=50000, max_daily_loss=1000, max_trailing_drawdown=2500, contract_multiplier=0.1):
+    def __init__(self, initial_balance=50000, max_daily_loss=1000, max_trailing_drawdown=2500, contract_multiplier=0.1, payout_target=3000):
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.equity = initial_balance
@@ -57,6 +57,11 @@ class BacktestEngine:
         self.max_daily_loss = max_daily_loss
         self.max_trailing_drawdown = max_trailing_drawdown
         self.contract_multiplier = contract_multiplier # 0.1 = MNQ (Micro NQ)
+
+        self.payout_target = payout_target
+        self.payouts_count = 0
+        self.total_payout_amount = 0
+        self.payout_history = []
 
         self.position = 0  # 0: Flat, 1: Long, -1: Short
         self.entry_price = 0
@@ -90,6 +95,24 @@ class BacktestEngine:
             unrealized_pnl = (current_price - self.entry_price) * self.position * 20 * self.contract_multiplier
 
         self.equity = self.balance + unrealized_pnl
+
+        # Check Payout Target
+        if self.equity >= self.initial_balance + self.payout_target:
+            self.payouts_count += 1
+            self.total_payout_amount += self.payout_target
+            self.payout_history.append(timestamp)
+
+            # Reset Account (Withdrawal / New Eval)
+            if self.position != 0:
+                self.close_position(timestamp, current_price, "PAYOUT HIT")
+
+            self.balance = self.initial_balance
+            self.equity = self.initial_balance
+            self.high_water_mark = self.initial_balance
+            self.start_of_day_equity = self.initial_balance
+            self.max_dd_reached = 0 # Reset drawdown tracker for the new cycle
+
+            return # Skip other checks for this tick
 
         # Check Trailing Drawdown
         if self.equity > self.high_water_mark:
@@ -157,11 +180,8 @@ class BacktestEngine:
         self.stop_loss = sl
         self.take_profit = tp
 
-def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, max_dd=2500):
-    # Use 1 Micro contract (0.1) to manage drawdown over the full year.
-    # 2 Micros (0.2) hit the $2500 drawdown limit in the full year backtest.
-    # Risk management: 100 pt stop on 1 micro = 100 * 20 * 0.1 = $200 risk per trade.
-    engine = BacktestEngine(max_daily_loss=max_daily_loss, max_trailing_drawdown=max_dd, contract_multiplier=0.1)
+def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, max_dd=2500, contract_size=0.1, payout_target=3000):
+    engine = BacktestEngine(max_daily_loss=max_daily_loss, max_trailing_drawdown=max_dd, contract_multiplier=contract_size, payout_target=payout_target)
 
     current_date = None
     session_start_et = None
@@ -265,56 +285,50 @@ def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, 
     return engine
 
 def optimize(df):
-    # Reduced search space based on previous findings (15m ORB, 100 SL/TP was best)
+    # Optimization Goal: Maximize Payouts before Burnout.
+    # We can be more aggressive with size since we reset after Payout.
+
     orb_minutes_options = [15]
-    sl_pts_options = [80, 100, 120]
+    sl_pts_options = [60, 80, 100]
     tp_pts_options = [80, 100, 120]
+    contract_size_options = [0.1, 0.2, 0.3, 0.4] # Test 1 to 4 Micros
 
     best_score = -float('inf')
     best_params = {}
     best_result = {}
 
-    combinations = list(itertools.product(orb_minutes_options, sl_pts_options, tp_pts_options))
-    print(f"Testing {len(combinations)} combinations...")
+    combinations = list(itertools.product(orb_minutes_options, sl_pts_options, tp_pts_options, contract_size_options))
+    print(f"Testing {len(combinations)} combinations for Payout Hunting...")
 
     count = 0
     total = len(combinations)
-    for orb, sl, tp in combinations:
+
+    for orb, sl, tp, size in combinations:
         count += 1
-        if tp < sl: # Skip low RR
+        if tp < sl:
             continue
 
-        engine = run_backtest(df, orb_minutes=orb, sl_pts=sl, tp_pts=tp)
+        engine = run_backtest(df, orb_minutes=orb, sl_pts=sl, tp_pts=tp, contract_size=size, payout_target=3000)
 
-        total_pnl = engine.balance - engine.initial_balance
-        max_dd = engine.max_dd_reached
-        win_rate = 0
-        if len(engine.trades) > 0:
-            wins = len([t for t in engine.trades if t['pnl'] > 0])
-            win_rate = wins / len(engine.trades)
+        # Score Logic: Total Payout Amount.
+        # If failed, we still count the payouts we got before failing.
+        score = engine.total_payout_amount
 
-        # Score Logic
-        if engine.failed:
-            score = -10000
-        elif len(engine.trades) < 5:
-            score = -100
-        else:
-            # Profit Factor * Win Rate? Or just Net Profit?
-            # Prop Firm goal: Maximize Profit without failing.
-            score = total_pnl
+        # Tie-breaker: Fewer trades to get there? Or higher remaining balance?
+        # Let's add remaining balance as decimal tie breaker
+        score += (engine.balance - engine.initial_balance) / 100000
 
         if score > best_score:
             best_score = score
-            best_params = {'orb': orb, 'sl': sl, 'tp': tp}
+            best_params = {'orb': orb, 'sl': sl, 'tp': tp, 'size': size}
             best_result = {
-                'pnl': total_pnl,
-                'max_dd': max_dd,
-                'win_rate': win_rate,
-                'trades': len(engine.trades),
-                'failed': engine.failed
+                'total_payouts': engine.total_payout_amount,
+                'payout_count': engine.payouts_count,
+                'burned': engine.failed,
+                'trades': len(engine.trades)
             }
 
-        print(f"[{count}/{total}] ORB={orb}, SL={sl}, TP={tp} -> PnL: {total_pnl:.2f}, Failed: {engine.failed}")
+        print(f"[{count}/{total}] Size={size}, SL={sl}, TP={tp} -> Payouts: ${engine.total_payout_amount}, Count: {engine.payouts_count}, Burned: {engine.failed}")
 
     return best_params, best_result
 
