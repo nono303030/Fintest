@@ -33,16 +33,24 @@ if isNewSession
 
 // Update High/Low during the first X minutes
 // Check if we are within the ORB window
-// We can use time difference from session start
-// Or just count bars if timeframe is fixed. Let's use time check.
-startTime = time("1", sessStart) // Get start time of session for current day
-timeFromStart = (time - startTime) / 60000 // Minutes since open
+// We can use time difference from session start.
+// Note: time("1") returns the open time of the 1m bar.
+// To get the session start time for the current day, we can use a trick or just count minutes if on 1m chart.
+// Let's use a simpler bar counting method since we are on 1m timeframe generally.
+// Or better: use the `session.isfirst` built-in if available, or just track time elapsed.
 
-if inSession and timeFromStart < orbDuration
-    orbHigh := math.max(orbHigh, high)
-    orbLow := math.min(orbLow, low)
-else if inSession and timeFromStart >= orbDuration and not orbComplete
-    orbComplete := true
+// Current bar time in minutes of the day (e.g. 9:30 = 570)
+currentMinute = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
+// Session start is 09:30 ET -> 570 minutes.
+sessionStartMinute = 9 * 60 + 30
+minutesElapsed = currentMinute - sessionStartMinute
+
+if inSession
+    if minutesElapsed >= 0 and minutesElapsed < orbDuration
+        orbHigh := math.max(orbHigh, high)
+        orbLow := math.min(orbLow, low)
+    else if minutesElapsed >= orbDuration and not orbComplete
+        orbComplete := true
 
 // --- Entry Logic ---
 // Only take 1 trade per day
