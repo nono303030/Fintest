@@ -59,15 +59,16 @@ if isNewSession
     tradeTakenToday := false
 
 // Entry Conditions
-longCond = orbComplete and not tradeTakenToday and close > orbHigh and strategy.position_size == 0
-shortCond = orbComplete and not tradeTakenToday and close < orbLow and strategy.position_size == 0
+// We place STOP orders immediately once the ORB is complete.
+// The market will trigger them if price breaks out.
+canTrade = orbComplete and not tradeTakenToday and strategy.position_size == 0
 
-if longCond
+if canTrade
     strategy.entry("Long", strategy.long, stop=orbHigh + 0.25)
-    tradeTakenToday := true
-
-if shortCond
     strategy.entry("Short", strategy.short, stop=orbLow - 0.25)
+
+// Mark trade taken when position opens
+if strategy.position_size != 0
     tradeTakenToday := true
 
 // --- Exit Logic ---

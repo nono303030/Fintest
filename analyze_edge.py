@@ -255,11 +255,15 @@ def run_backtest(df, orb_minutes=15, sl_pts=20, tp_pts=40, max_daily_loss=1000, 
             engine.check_sl_tp(timestamp, row['high'], row['low'])
 
         # ORB Logic
-        if ts_et <= orb_end_et:
+        if ts_et < orb_end_et:
             orb_high = max(orb_high, row['high'])
             orb_low = min(orb_low, row['low'])
-            if ts_et == orb_end_et:
-                orb_complete = True
+        elif ts_et == orb_end_et:
+             # The minute the range ends, we mark it complete (at the open of this bar essentially, or close of previous)
+             # Actually, if we want 09:30-09:45 (15 mins), we capture bars 09:30...09:44.
+             # orb_end_et is 09:45.
+             # So < 09:45 captures 09:44 bar. Correct.
+             orb_complete = True
 
         # Check for Entry
         if orb_complete and not entry_taken and engine.position == 0 and not engine.daily_loss_hit:
