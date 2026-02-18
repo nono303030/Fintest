@@ -1,0 +1,3 @@
+=== BEST STRATEGY FOUND ===
+Parameters: {'orb': 15, 'sl': 100, 'tp': 100, 'size': 0.4}
+Results: {'total_payouts': 15000, 'payout_count': 5, 'burned': True, 'trades': 61}
